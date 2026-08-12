@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "KLONOO",
+  "version": "1.0.0",
+  "description": "Web snapshot, code capture, and design system export tool.",
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "Open KLONOO"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ]
+}
