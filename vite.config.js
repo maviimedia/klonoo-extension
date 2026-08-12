@@ -10,14 +10,17 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main: 'index.html',
-        background: 'src/background.js',
-        content: 'src/content.js'
+        content: 'src/content.jsx',
+        background: 'src/background.js'
       },
       output: {
         entryFileNames: '[name].js',
-        chunkFileNames: '[name].js',
-        assetFileNames: '[name].[ext]'
+        assetFileNames: (assetInfo) => {
+          if (assetInfo.name && assetInfo.name.endsWith('.css')) {
+            return 'klonoo.css';
+          }
+          return '[name].[ext]';
+        }
       }
     }
   }

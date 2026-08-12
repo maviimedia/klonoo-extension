@@ -3,15 +3,17 @@
   "name": "KLONOO",
   "version": "1.0.0",
   "description": "Web snapshot, code capture, and design system export tool.",
+  "icons": {
+    "16": "klonoo—ICON16.png",
+    "48": "klonoo—ICON48.png",
+    "128": "klonoo—ICON128.png"
+  },
   "action": {
-    "default_popup": "index.html",
     "default_title": "Open KLONOO"
   },
   "permissions": [
     "activeTab",
-    "scripting",
-    "downloads",
-    "storage"
+    "scripting"
   ],
   "background": {
     "service_worker": "background.js"
@@ -20,6 +22,17 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "*.png",
+        "*.svg",
+        "*.css",
+        "manrope/*.ttf"
+      ],
+      "matches": ["<all_urls>"]
     }
   ]
 }
