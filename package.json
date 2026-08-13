@@ -14,6 +14,7 @@
     "@remixicon/react": "^4.9.0",
     "@supabase/supabase-js": "^2.112.3",
     "@tailwindcss/vite": "^4.3.3",
+    "jszip": "^3.10.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "remixicon": "^4.9.1",
