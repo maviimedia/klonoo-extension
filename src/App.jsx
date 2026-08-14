@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   RiAiGenerate,
   RiCodeAiLine,
@@ -19,6 +19,15 @@ export default function App() {
   const [isClosing, setIsClosing] = useState(false);
   const [currentView, setCurrentView] = useState('MAIN');
   const [isTransitioning, setIsTransitioning] = useState(false);
+
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
+  const [currentPos, setCurrentPos] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+
+  const [isSelectingElement, setIsSelectingElement] = useState(false);
+  const [hoveredRect, setHoveredRect] = useState(null);
+  const hoveredRectRef = useRef(null);
 
   useEffect(() => {
     const handleMessage = (request) => {
@@ -499,6 +508,299 @@ export default function App() {
     switchView('MAIN');
   };
 
+  const triggerScreenSelection = () => {
+    setIsSelecting(true);
+  };
+
+  const triggerElementSelection = () => {
+    setIsSelectingElement(true);
+    setHoveredRect(null);
+    hoveredRectRef.current = null;
+  };
+
+  useEffect(() => {
+    if (!isSelectingElement) return;
+
+  const handleMouseMove = (e) => {
+      const elements = document.elementsFromPoint(e.clientX, e.clientY);
+      const target = elements.find(el => 
+        !el.closest('#klonoo-extension-root') && 
+        el.id !== 'klonoo-element-highlight'
+      );
+
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        const newRect = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height
+        };
+        setHoveredRect(newRect);
+        hoveredRectRef.current = newRect; 
+      }
+    };
+
+  const handleClick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rectToCapture = hoveredRectRef.current;
+      setHoveredRect(null);
+      hoveredRectRef.current = null;
+
+      if (!rectToCapture || rectToCapture.width === 0 || rectToCapture.height === 0) {
+        setIsSelectingElement(false);
+        return;
+      }
+
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ action: "CAPTURE_VISIBLE" }, (response) => {
+          if (response && response.dataUrl) {
+            const img = new Image();
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const dpr = window.devicePixelRatio || 1;
+
+              const viewportY = Math.max(0, rectToCapture.top);
+              const viewportX = Math.max(0, rectToCapture.left);
+              const cutTop = viewportY - rectToCapture.top;
+              const cutLeft = viewportX - rectToCapture.left;
+              const visibleWidth = Math.min(rectToCapture.width - cutLeft, window.innerWidth - viewportX);
+              const visibleHeight = Math.min(rectToCapture.height - cutTop, window.innerHeight - viewportY);
+
+              canvas.width = visibleWidth * dpr;
+              canvas.height = visibleHeight * dpr;
+              const ctx = canvas.getContext('2d');
+
+              ctx.drawImage(
+                img,
+                viewportX * dpr, viewportY * dpr, visibleWidth * dpr, visibleHeight * dpr,
+                0, 0, visibleWidth * dpr, visibleHeight * dpr
+              );
+
+              const croppedDataUrl = canvas.toDataURL('image/png');
+              const a = document.createElement('a');
+              a.href = croppedDataUrl;
+              const siteName = window.location.hostname.replace('www.', '') || 'website';
+              a.download = `klonoo-${siteName}-element.png`;
+              a.click();
+
+              setIsSelectingElement(false); 
+              switchView('MAIN');
+            };
+            img.src = response.dataUrl;
+          } else {
+            setIsSelectingElement(false);
+            switchView('MAIN');
+          }
+        });
+      }, 400);
+    };
+
+  const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsSelectingElement(false);
+        setHoveredRect(null);
+        hoveredRectRef.current = null;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove, true);
+    window.addEventListener('click', handleClick, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove, true);
+      window.removeEventListener('click', handleClick, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [isSelectingElement]);
+
+  const handleMouseDown = (e) => {
+    setStartPos({ x: e.clientX, y: e.clientY });
+    setCurrentPos({ x: e.clientX, y: e.clientY });
+    setIsDragging(true);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging) return;
+    setCurrentPos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleMouseUp = async () => {
+    setIsDragging(false);
+
+    const x = Math.min(startPos.x, currentPos.x);
+    const y = Math.min(startPos.y, currentPos.y);
+    const width = Math.abs(currentPos.x - startPos.x);
+    const height = Math.abs(currentPos.y - startPos.y);
+
+    if (width < 10 || height < 10) {
+      setIsSelecting(false);
+      return; 
+    }
+
+    setTimeout(() => {
+      try {
+        chrome.runtime.sendMessage({ action: "CAPTURE_VISIBLE" }, (response) => {
+          if (response && response.dataUrl) {
+            const img = new Image();
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const dpr = window.devicePixelRatio || 1;
+              
+              canvas.width = width * dpr;
+              canvas.height = height * dpr;
+              const ctx = canvas.getContext('2d');
+
+              ctx.drawImage(
+                img,
+                x * dpr, y * dpr, width * dpr, height * dpr,
+                0, 0, width * dpr, height * dpr
+              );
+
+              const croppedDataUrl = canvas.toDataURL('image/png');
+              const a = document.createElement('a');
+              a.href = croppedDataUrl;
+              const siteName = window.location.hostname.replace('www.', '') || 'website';
+              a.download = `klonoo-${siteName}-screen.png`;
+              a.click();
+              
+              setIsSelecting(false);
+              switchView('MAIN');
+            };
+            img.src = response.dataUrl;
+          } else {
+            setIsSelecting(false);
+            switchView('MAIN');
+          }
+        });
+      } catch (e) {
+        setIsSelecting(false);
+        switchView('MAIN');
+      }
+    }, 400);
+  };
+
+  const handleFullPageCapture = async () => {
+    switchView('CAPTURING');
+    
+    const klonooRoot = document.getElementById('klonoo-extension-root');
+    if (klonooRoot) klonooRoot.style.display = 'none';
+
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    let totalHeight = Math.max(
+      document.body.scrollHeight, 
+      document.documentElement.scrollHeight,
+      document.body.offsetHeight, 
+      document.documentElement.offsetHeight,
+      document.documentElement.clientHeight
+    );
+    const viewportHeight = window.innerHeight;
+
+    window.scrollTo(0, 0);
+    await wait(600); 
+
+    const freezeStyle = document.createElement('style');
+    freezeStyle.id = 'klonoo-freeze';
+    freezeStyle.innerHTML = `
+      *, *::before, *::after {
+        transition: none !important;
+        animation: none !important;
+        scroll-behavior: auto !important;
+      }
+      ::-webkit-scrollbar { display: none !important; }
+      body { overflow-x: hidden !important; }
+    `;
+    document.head.appendChild(freezeStyle);
+
+    const dpr = window.devicePixelRatio || 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = totalHeight * dpr;
+    const ctx = canvas.getContext('2d');
+
+    const hideFloatingElements = () => {
+      const hidden = [];
+      const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT, null, false);
+      let node;
+      while (node = walker.nextNode()) {
+        if (node.id === 'klonoo-extension-root') continue;
+        const style = window.getComputedStyle(node);
+        if (style.position === 'fixed' || style.position === 'sticky') {
+          hidden.push({ node, originalStyle: node.getAttribute('style') });
+          node.style.setProperty('opacity', '0', 'important');
+          node.style.setProperty('visibility', 'hidden', 'important');
+        }
+      }
+      return hidden;
+    };
+
+    const restoreFloatingElements = (hidden) => {
+      hidden.forEach(item => {
+        if (item.originalStyle === null) {
+          item.node.removeAttribute('style');
+        } else {
+          item.node.setAttribute('style', item.originalStyle);
+        }
+      });
+    };
+
+    let globalHiddenElements = [];
+
+    for (let currentY = 0; currentY < totalHeight; currentY += viewportHeight) {
+      window.scrollTo(0, currentY);
+      await wait(400); 
+
+      if (currentY > 0) {
+        globalHiddenElements = hideFloatingElements();
+        await wait(50); 
+      }
+
+      const response = await new Promise(resolve => {
+        chrome.runtime.sendMessage({ action: "CAPTURE_VISIBLE" }, resolve);
+      });
+      
+      if (response && response.dataUrl) {
+        const img = new Image();
+        await new Promise((resolve) => {
+          img.onload = () => {
+            const drawY = window.scrollY * dpr;
+            ctx.drawImage(
+              img, 
+              0, 0, img.width, img.height,
+              0, drawY, window.innerWidth * dpr, window.innerHeight * dpr
+            );
+            resolve();
+          };
+          img.src = response.dataUrl;
+        });
+      }
+
+      if (currentY > 0) {
+        restoreFloatingElements(globalHiddenElements);
+      }
+    }
+
+    if (document.getElementById('klonoo-freeze')) {
+      document.head.removeChild(freezeStyle);
+    }
+    
+    window.scrollTo(0, 0);
+    if (klonooRoot) klonooRoot.style.display = 'block';
+
+    const finalDataUrl = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = finalDataUrl;
+    const siteName = window.location.hostname.replace('www.', '') || 'website';
+    a.download = `klonoo-${siteName}-fullpage.png`;
+    a.click();
+    
+    switchView('MAIN');
+  };
+
   const cancelCapture = () => {
     switchView('EXPORT');
   };
@@ -587,15 +889,19 @@ export default function App() {
         <span className="absolute top-full mt-2 bg-[#2a2a2a] text-white text-[11px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-lg border border-white/10 hidden max-[768px]:block" style={{ left: '50%', transform: 'translateX(-50%)' }}>Web Snapshot</span>
       </div>
       <div className="w-[1px] h-4 bg-white/20 mx-1"></div>
-      <button className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
+
+      <button onClick={triggerScreenSelection} className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
         <span>Screen</span>
       </button>
-      <button className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
+      
+      <button onClick={triggerElementSelection} className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
+        <span>Element</span>
+      </button>
+      
+      <button onClick={handleFullPageCapture} className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
         <span>Full Page</span>
       </button>
-      <button className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
-        <span>Smart</span>
-      </button>
+
       <div className="w-[1px] h-4 bg-white/20 mx-1"></div>
       <button onClick={() => switchView('MAIN')} className="flex items-center justify-center hover:bg-red-500/20 w-8 h-8 rounded-lg transition-all duration-200 cursor-pointer text-gray-400 hover:text-red-400 group relative active:scale-95">
         <RiCloseLine className="text-lg" />
@@ -643,32 +949,88 @@ export default function App() {
     </>
   );
 
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        top: '24px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        pointerEvents: 'auto',
-        zIndex: 2147483647
-      }}
-    >
+return (
+    <>
+      {isSelecting && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            cursor: 'crosshair',
+            zIndex: 2147483647,
+            backgroundColor: 'rgba(0, 0, 0, 0.1)',
+            pointerEvents: 'auto'
+          }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove} 
+          onMouseUp={handleMouseUp}
+        >
+          {isDragging && (
+            <div
+              style={{
+                position: 'absolute',
+                border: '2px dashed #3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                left: `${Math.min(startPos.x, currentPos.x)}px`,
+                top: `${Math.min(startPos.y, currentPos.y)}px`,
+                width: `${Math.abs(currentPos.x - startPos.x)}px`,
+                height: `${Math.abs(currentPos.y - startPos.y)}px`,
+                pointerEvents: 'none'
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {isSelectingElement && hoveredRect && (
+        <div
+          id="klonoo-element-highlight"
+          style={{
+            position: 'fixed',
+            top: `${hoveredRect.top}px`,
+            left: `${hoveredRect.left}px`,
+            width: `${hoveredRect.width}px`,
+            height: `${hoveredRect.height}px`,
+            border: '2px solid #3b82f6',
+            backgroundColor: 'rgba(59, 130, 246, 0.15)',
+            pointerEvents: 'none', 
+            zIndex: 2147483647,
+            transition: 'all 0.05s linear', 
+            cursor: 'crosshair'
+          }}
+        />
+      )}
+
       <div
-        id="floating-toolbar"
-        className={isClosing || isTransitioning ? 'animate-scale-out' : 'animate-slide-down'}
+        style={{
+          position: 'absolute',
+          top: '24px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          pointerEvents: 'auto',
+          zIndex: 2147483646,
+          display: isSelecting || isSelectingElement ? 'none' : 'block' 
+        }}
       >
         <div
-          className="flex items-center bg-[#1e1e1e] text-[#e0e0e0] rounded-xl px-1.5 py-1.5 shadow-2xl text-[13px] font-medium border border-white/10"
-          style={{ fontFamily: '"Manrope", sans-serif' }}
+          id="floating-toolbar"
+          className={isClosing || isTransitioning ? 'animate-scale-out' : 'animate-slide-down'}
         >
-          {currentView === 'MAIN' && renderMainView()}
-          {currentView === 'EXPORT' && renderExportView()}
-          {currentView === 'SNAPSHOT' && renderSnapshotView()}
-          {currentView === 'CODE' && renderCodeView()}
-          {currentView === 'CAPTURING' && renderCapturingView()}
+          <div
+            className="flex items-center bg-[#1e1e1e] text-[#e0e0e0] rounded-xl px-1.5 py-1.5 shadow-2xl text-[13px] font-medium border border-white/10"
+            style={{ fontFamily: '"Manrope", sans-serif' }}
+          >
+            {currentView === 'MAIN' && renderMainView()}
+            {currentView === 'EXPORT' && renderExportView()}
+            {currentView === 'SNAPSHOT' && renderSnapshotView()}
+            {currentView === 'CODE' && renderCodeView()}
+            {currentView === 'CAPTURING' && renderCapturingView()}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
