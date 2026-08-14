@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "KLONOO",
-  "version": "1.0.0",
-  "description": "Web snapshot, code capture, and design system export tool.",
+  "name": "Klonoo",
+  "version": "2.0.0",
+  "description": "The ultimate web extraction tool: Pixel-perfect code cloning, full-page snapshots, tech stack detection, and design system export.",
   "icons": {
     "16": "klonoo—ICON16.png",
     "48": "klonoo—ICON48.png",
     "128": "klonoo—ICON128.png"
   },
   "action": {
-    "default_title": "Open KLONOO"
+    "default_title": "Open Klonoo"
   },
   "permissions": [
     "activeTab",

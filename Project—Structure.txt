@@ -2,6 +2,7 @@ klonoo-extension/
     .gitignore
     LICENSE
     README.md
+    Tech—Stack.txt
     eslint.config.js
     index.html
     package-lock.json

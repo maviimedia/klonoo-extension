@@ -11,7 +11,8 @@ import {
   RiPaintingAiLine,
   RiWindowLine,
   RiCheckboxMultipleBlankLine,
-  RiLoader4Line
+  RiLoader4Line,
+  RiStackLine
 } from '@remixicon/react';
 
 export default function App() {
@@ -28,6 +29,11 @@ export default function App() {
   const [isSelectingElement, setIsSelectingElement] = useState(false);
   const [hoveredRect, setHoveredRect] = useState(null);
   const hoveredRectRef = useRef(null);
+  const hoveredElementRef = useRef(null);
+  const selectionModeRef = useRef('SNAPSHOT');
+
+  const [techStack, setTechStack] = useState(null);
+  const [isDetectingTech, setIsDetectingTech] = useState(false);
 
   useEffect(() => {
     const handleMessage = (request) => {
@@ -63,7 +69,39 @@ export default function App() {
     }, 200);
   };
 
+  const detectTechStack = async () => {
+    setIsDetectingTech(true);
+    setTechStack(null);
+    
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    let detected = "Vanilla JS / HTML";
+
+    if (document.querySelector('script[id="__NEXT_DATA__"]') || window.next) {
+      detected = "Next.js";
+    } else if (document.querySelector('[data-reactroot]') || Array.from(document.querySelectorAll('*')).some(el => Object.keys(el).some(k => k.startsWith('__react')))) {
+      detected = "React";
+    } else if (document.querySelector('html[data-wf-page]') || window.Webflow) {
+      detected = "Webflow";
+    } else if (window.Shopify || document.querySelector('script[src*="cdn.shopify.com"]')) {
+      detected = "Shopify";
+    } else if (document.querySelector('link[href*="wp-content"]') || document.querySelector('meta[name="generator"][content*="WordPress"]')) {
+      detected = "WordPress";
+    } else if (document.querySelector('[data-v-app]') || window.__VUE__) {
+      detected = "Vue.js";
+    } else if (document.querySelector('[class*="flex "], [class*="pt-"], [class*="text-"]')) {
+      detected = "Tailwind CSS";
+    }
+
+    setTechStack(detected);
+    setIsDetectingTech(false);
+  };
+
   const switchView = (newView) => {
+    if (newView === 'CODE' && !techStack && !isDetectingTech) {
+      detectTechStack();
+    }
+    
     setIsTransitioning(true);
     setTimeout(() => {
       setCurrentView(newView);
@@ -512,11 +550,124 @@ export default function App() {
     setIsSelecting(true);
   };
 
-  const triggerElementSelection = () => {
+  const triggerElementSelection = (mode = 'SNAPSHOT') => {
+    selectionModeRef.current = mode;
     setIsSelectingElement(true);
     setHoveredRect(null);
     hoveredRectRef.current = null;
+    hoveredElementRef.current = null;
   };
+
+  useEffect(() => {
+    if (!isSelectingElement) return;
+
+    const handleMouseMove = (e) => {
+      const elements = document.elementsFromPoint(e.clientX, e.clientY);
+      const target = elements.find(el => 
+        !el.closest('#klonoo-extension-root') && 
+        el.id !== 'klonoo-element-highlight'
+      );
+
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        const newRect = {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height
+        };
+        setHoveredRect(newRect);
+        hoveredRectRef.current = newRect; 
+        hoveredElementRef.current = target;
+      }
+    };
+
+    const handleClick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rectToCapture = hoveredRectRef.current;
+      const targetElement = hoveredElementRef.current;
+      const mode = selectionModeRef.current;
+
+      setHoveredRect(null);
+      hoveredRectRef.current = null;
+      hoveredElementRef.current = null;
+
+      if (!rectToCapture || rectToCapture.width === 0 || rectToCapture.height === 0 || !targetElement) {
+        setIsSelectingElement(false);
+        return;
+      }
+
+      if (mode === 'CODE') {
+        setIsSelectingElement(false);
+        extractAndDownloadCode(targetElement, 'element');
+        return;
+      }
+
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ action: "CAPTURE_VISIBLE" }, (response) => {
+          if (response && response.dataUrl) {
+            const img = new Image();
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const dpr = window.devicePixelRatio || 1;
+
+              const viewportY = Math.max(0, rectToCapture.top);
+              const viewportX = Math.max(0, rectToCapture.left);
+              const cutTop = viewportY - rectToCapture.top;
+              const cutLeft = viewportX - rectToCapture.left;
+              const visibleWidth = Math.min(rectToCapture.width - cutLeft, window.innerWidth - viewportX);
+              const visibleHeight = Math.min(rectToCapture.height - cutTop, window.innerHeight - viewportY);
+
+              canvas.width = visibleWidth * dpr;
+              canvas.height = visibleHeight * dpr;
+              const ctx = canvas.getContext('2d');
+
+              ctx.drawImage(
+                img,
+                viewportX * dpr, viewportY * dpr, visibleWidth * dpr, visibleHeight * dpr,
+                0, 0, visibleWidth * dpr, visibleHeight * dpr
+              );
+
+              const croppedDataUrl = canvas.toDataURL('image/png');
+              const a = document.createElement('a');
+              a.href = croppedDataUrl;
+              const siteName = window.location.hostname.replace('www.', '') || 'website';
+              a.download = `klonoo-${siteName}-element.png`;
+              a.click();
+
+              setIsSelectingElement(false); 
+              switchView('MAIN');
+            };
+            img.src = response.dataUrl;
+          } else {
+            setIsSelectingElement(false);
+            switchView('MAIN');
+          }
+        });
+      }, 400);
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setIsSelectingElement(false);
+        setHoveredRect(null);
+        hoveredRectRef.current = null;
+        hoveredElementRef.current = null;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove, true);
+    window.addEventListener('click', handleClick, true);
+    window.addEventListener('keydown', handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove, true);
+      window.removeEventListener('click', handleClick, true);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [isSelectingElement]);
 
   useEffect(() => {
     if (!isSelectingElement) return;
@@ -805,6 +956,159 @@ export default function App() {
     switchView('EXPORT');
   };
 
+  const formatHTML = (html) => {
+    let formatted = '';
+    let indent = '';
+    html.split(/>\s*</).forEach((node) => {
+      if (node.match(/^\/\w/)) indent = indent.substring(2);
+      formatted += indent + '<' + node + '>\r\n';
+      if (node.match(/^<?\w[^>]*[^\/]$/) && !node.startsWith('input') && !node.startsWith('img') && !node.startsWith('br') && !node.startsWith('hr')) {
+        indent += '  ';
+      }
+    });
+    return formatted.substring(1, formatted.length - 3);
+  };
+
+  const extractAndDownloadCode = async (targetElement, mode = 'page') => {
+    switchView('CAPTURING');
+    
+    const zip = new JSZip();
+    const assetsFolder = zip.folder("assets");
+    const imgFolder = assetsFolder.folder("images");
+    const fontFolder = assetsFolder.folder("fonts");
+    const iconFolder = assetsFolder.folder("icons");
+    
+    const clone = targetElement.cloneNode(true);
+    const elementsToRemove = clone.querySelectorAll('script, iframe, noscript, [id^="klonoo-"], .google-auto-placed, [id*="ads"], [class*="ads"], [id*="cookie"], [class*="cookie"], [id*="payment"], [class*="payment"]');
+    elementsToRemove.forEach(el => el.remove());
+
+    const assetMap = new Map();
+
+    const processAsset = async (url, baseUrl, type) => {
+      if (!url || url.startsWith('data:') || url.startsWith('chrome-extension:')) return url;
+      
+      try {
+        const absUrl = new URL(url, baseUrl).href;
+        if (assetMap.has(absUrl)) return assetMap.get(absUrl);
+        
+        const response = await fetch(absUrl);
+        const blob = await response.blob();
+        if (blob.size === 0) throw new Error('Empty');
+
+        let fileName = absUrl.split('/').pop().split('?')[0] || `asset-${Date.now()}`;
+        let relativePath = '';
+
+        if (type === 'font' || fileName.match(/\.(woff|woff2|ttf|eot|otf)/i)) {
+          if (!fileName.includes('.')) fileName += '.woff2';
+          fontFolder.file(fileName, blob);
+          relativePath = `./assets/fonts/${fileName}`;
+        } else if (type === 'icon') {
+          if (!fileName.includes('.')) fileName += '.ico';
+          iconFolder.file(fileName, blob);
+          relativePath = `./assets/icons/${fileName}`;
+        } else {
+          if (!fileName.includes('.')) fileName += '.png';
+          imgFolder.file(fileName, blob);
+          relativePath = `./assets/images/${fileName}`;
+        }
+        
+        assetMap.set(absUrl, relativePath);
+        return relativePath;
+      } catch (e) {
+        return url; 
+      }
+    };
+
+    const imgTags = clone.querySelectorAll('img');
+    for (const img of imgTags) {
+      const realSrc = img.getAttribute('data-src') || img.getAttribute('data-original') || img.src;
+      if (realSrc) {
+        const newSrc = await processAsset(realSrc, window.location.href, 'image');
+        img.setAttribute('src', newSrc);
+        img.removeAttribute('srcset'); 
+        img.removeAttribute('data-src');
+        img.removeAttribute('loading'); 
+      }
+    }
+
+    let finalIconsHTML = '';
+    const iconTags = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]');
+    for (const icon of iconTags) {
+      if (icon.href) {
+        const newHref = await processAsset(icon.href, window.location.href, 'icon');
+        finalIconsHTML += `  <link rel="${icon.rel}" href="${newHref}">\n`;
+      }
+    }
+
+    let allCSS = '';
+    let externalLinks = '';
+
+    const styleSheets = Array.from(document.styleSheets);
+    for (const sheet of styleSheets) {
+      if (sheet.ownerNode && (sheet.ownerNode.id === 'klonoo-fonts' || sheet.ownerNode.id === 'klonoo-freeze')) continue;
+
+      let cssText = '';
+      let baseUrl = window.location.href;
+
+      try {
+        if (sheet.href) {
+          baseUrl = sheet.href;
+          const res = await fetch(sheet.href);
+          cssText = await res.text();
+        } else {
+          const rules = Array.from(sheet.cssRules || []);
+          cssText = rules.map(r => r.cssText).join('\n');
+        }
+      } catch (e) {
+        if (sheet.href) {
+          externalLinks += `  <link rel="stylesheet" href="${sheet.href}">\n`;
+        }
+        continue;
+      }
+
+      const urlRegex = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+      const matches = [...cssText.matchAll(urlRegex)];
+
+      for (const match of matches) {
+        const rawUrl = match[2];
+        const fullMatch = match[0];
+        
+        if (rawUrl.startsWith('data:')) continue;
+
+        const newUrl = await processAsset(rawUrl, baseUrl, 'auto');
+        cssText = cssText.replace(fullMatch, `url("${newUrl}")`);
+      }
+
+      allCSS += cssText + '\n';
+    }
+
+    const rawHTML = mode === 'page' ? clone.innerHTML : clone.outerHTML;
+    const cleanHTML = formatHTML(rawHTML);
+
+    const finalHTML = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Klonoo Pixel-Perfect Clone</title>\n${finalIconsHTML}${externalLinks}  <style>\n${allCSS}  </style>\n</head>\n<body>\n${cleanHTML}\n</body>\n</html>`;
+
+    zip.file('index.html', finalHTML);
+
+    const content = await zip.generateAsync({ type: 'blob' });
+    const downloadUrl = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    
+    const siteName = window.location.hostname.replace('www.', '') || 'website';
+    a.download = `klonoo-${siteName}-pixel-perfect.zip`;
+    
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(downloadUrl);
+
+    switchView('MAIN');
+  };
+
+  const handleCapturePageCode = () => {
+    extractAndDownloadCode(document.body, 'page');
+  };  
+
   if (!isVisible && !isClosing) return null;
 
   const logoUrl = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
@@ -894,7 +1198,7 @@ export default function App() {
         <span>Screen</span>
       </button>
       
-      <button onClick={triggerElementSelection} className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
+      <button onClick={() => triggerElementSelection('SNAPSHOT')} className="flex items-center px-3 py-1.5 hover:bg-white/10 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 text-gray-300 hover:text-white">
         <span>Element</span>
       </button>
       
@@ -914,24 +1218,33 @@ export default function App() {
     <>
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl group relative cursor-default">
         <img src={logoUrl} alt="Klonoo Logo" className="w-4 h-4" />
-        <span className="hidden min-[769px]:inline-block">Klonoo</span>
-        <span className="absolute top-full mt-2 bg-[#2a2a2a] text-white text-[11px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-lg border border-white/10 hidden max-[768px]:block" style={{ left: '50%', transform: 'translateX(-50%)' }}>Klonoo</span>
+        {isDetectingTech ? (
+          <div className="flex items-center animate-pulse">
+            <div className="h-3 w-16 bg-white/20 rounded"></div>
+          </div>
+        ) : (
+          <span className="hidden min-[769px]:inline-block font-semibold text-white tracking-wide text-[12px]">
+            {techStack}
+          </span>
+        )}
       </div>
+
       <div className="w-[1px] h-4 bg-white/20 mx-1"></div>
-      <button className="flex items-center gap-2 hover:bg-white/10 px-2 py-1.5 rounded-lg transition-all duration-200 cursor-pointer group relative active:scale-95">
+      
+      <button onClick={handleCapturePageCode} className="flex items-center gap-2 hover:bg-white/10 px-2 py-1.5 rounded-lg transition-all duration-200 cursor-pointer group relative active:scale-95">
         <RiWindowLine className="text-base text-gray-400 group-hover:text-white transition-colors duration-200" />
         <span className="hidden min-[769px]:inline-block">Capture page</span>
-        <span className="absolute top-full mt-2 bg-[#2a2a2a] text-white text-[11px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-lg border border-white/10 hidden max-[768px]:block" style={{ left: '50%', transform: 'translateX(-50%)' }}>Capture page</span>
       </button>
-      <button className="flex items-center gap-2 hover:bg-white/10 px-2 py-1.5 rounded-lg transition-all duration-200 cursor-pointer group relative active:scale-95">
+
+      <button onClick={() => triggerElementSelection('CODE')} className="flex items-center gap-2 hover:bg-white/10 px-2 py-1.5 rounded-lg transition-all duration-200 cursor-pointer group relative active:scale-95">
         <RiCheckboxMultipleBlankLine className="text-base text-gray-400 group-hover:text-white transition-colors duration-200" />
         <span className="hidden min-[769px]:inline-block">Select element</span>
-        <span className="absolute top-full mt-2 bg-[#2a2a2a] text-white text-[11px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-lg border border-white/10 hidden max-[768px]:block" style={{ left: '50%', transform: 'translateX(-50%)' }}>Select element</span>
       </button>
+
       <div className="w-[1px] h-4 bg-white/20 mx-1"></div>
+      
       <button onClick={() => switchView('MAIN')} className="flex items-center justify-center hover:bg-red-500/20 w-8 h-8 rounded-lg transition-all duration-200 cursor-pointer text-gray-400 hover:text-red-400 group relative active:scale-95">
         <RiCloseLine className="text-lg" />
-        <span className="absolute top-full mt-2 bg-[#2a2a2a] text-white text-[11px] py-1 px-2 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-lg border border-white/10" style={{ left: '50%', transform: 'translateX(-50%)' }}>Close</span>
       </button>
     </>
   );
